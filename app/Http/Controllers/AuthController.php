@@ -5,57 +5,43 @@ use Illuminate\Http\Request;
 use App\Services\WordPressService;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\Http;
 
 class AuthController extends Controller
 {
-    protected $wp;
+    protected WordPressService $wp;
 
     public function __construct(WordPressService $wp)
     {
         $this->wp = $wp;
     }
 
-    // /auth/redirect
-    public function redirectToProvider(Request $request)
+    public function redirectToProvider()
     {
-        $url = $this->wp->getAuthUrl();
-        return redirect($url);
+        return redirect($this->wp->getAuthUrl());
     }
 
-    // /auth/callback
     public function handleProviderCallback(Request $request)
     {
-        $code = $request->get('code');
-        if (! $code) return redirect('/')->withErrors('No code returned');
+        $code = $request->query('code');
+        if (! $code) {
+            return redirect('/')->withErrors('Authorization code missing.');
+        }
 
         $tokenData = $this->wp->exchangeCodeForToken($code);
         $accessToken = $tokenData['access_token'] ?? null;
         if (! $accessToken) {
-            return redirect('/')->withErrors('Unable to get access token');
+            return redirect('/')->withErrors('Unable to obtain access token from WordPress.');
         }
 
-        // Get user sites and confirm admin capability on configured site
         $sites = $this->wp->getUserSites($accessToken);
         $allowed = false;
-        if (is_array($sites)) {
-            foreach ($sites as $site) {
-                // site slug or ID might match your WP_SITE_ID
-                if (($site['ID'] ?? $site['id'] ?? null) == config('services.wordpress.site_id')
-                    || ($site['URL'] ?? null) == config('services.wordpress.site_id')) {
-                    // There are varying response keys; look for 'roles'/'capabilities'
-                    $roles = $site['roles'] ?? ($site['role'] ?? []);
-                    if (is_array($roles) && in_array('administrator', $roles)) {
-                        $allowed = true;
-                        break;
-                    }
-                    // fallback: if site entry has 'capabilities' or 'is_admin' flags, check them
-                    if (!empty($site['capabilities']) && (isset($site['capabilities']['manage']) || true)) {
-                        // (best-effort) accept; but ideally check admin explicitly
-                        $allowed = true;
-                        break;
-                    }
+        foreach ($sites as $site) {
+            $siteId = $site['ID'] ?? ($site['ID'] ?? null);
+            $siteUrl = $site['URL'] ?? ($site['url'] ?? null);
+            if ($siteId == config('services.wordpress.site_id') || $siteUrl == config('services.wordpress.site_id')) {
+                if (!empty($site['roles']) && in_array('administrator', (array)$site['roles'])) {
+                    $allowed = true;
+                    break;
                 }
             }
         }
@@ -64,21 +50,23 @@ class AuthController extends Controller
             return redirect('/')->withErrors('You must be an administrator of the configured WordPress site.');
         }
 
-        // Save or update user locally (store token for API calls)
-        $userData = Http::withToken($accessToken)->get('https://public-api.wordpress.com/rest/v1.1/me')->json();
+        $me = $this->wp->getMe($accessToken);
+        $email = $me['email'] ?? null;
+        $name = $me['display_name'] ?? ($me['username'] ?? 'WP User');
+        $wordpressId = $me['ID'] ?? null;
 
         $user = User::updateOrCreate(
-            ['email' => $userData['email'] ?? $userData['ID'] ?? 'unknown'],
+            ['email' => $email ?: "wpuser_{$wordpressId}@example.invalid"],
             [
-                'name' => $userData['display_name'] ?? 'WP User',
-                'wordpress_id' => $userData['ID'] ?? null,
+                'name' => $name,
+                'wordpress_id' => $wordpressId,
                 'access_token' => $accessToken,
                 'refresh_token' => $tokenData['refresh_token'] ?? null,
                 'token_expires_at' => isset($tokenData['expires_in']) ? now()->addSeconds($tokenData['expires_in']) : null,
             ]
         );
 
-        Auth::login($user);
+        Auth::login($user, true);
         return redirect('/app');
     }
 }

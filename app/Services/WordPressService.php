@@ -6,10 +6,10 @@ use Illuminate\Support\Str;
 
 class WordPressService
 {
-    protected $clientId;
-    protected $clientSecret;
-    protected $redirect;
-    protected $siteId;
+    protected string $clientId;
+    protected string $clientSecret;
+    protected string $redirect;
+    protected string $siteId;
 
     public function __construct()
     {
@@ -19,21 +19,19 @@ class WordPressService
         $this->siteId = config('services.wordpress.site_id');
     }
 
-    // URL to redirect user for authorization
-    public function getAuthUrl($state = null)
+    public function getAuthUrl(string $state = null): string
     {
         $params = http_build_query([
             'client_id' => $this->clientId,
             'redirect_uri' => $this->redirect,
             'response_type' => 'code',
-            'scope' => 'global', // or narrower scopes if desired
+            'scope' => 'auth',
             'state' => $state ?? Str::random(40),
         ]);
         return "https://public-api.wordpress.com/oauth2/authorize?{$params}";
     }
 
-    // Exchange code for access token
-    public function exchangeCodeForToken(string $code)
+    public function exchangeCodeForToken(string $code): array
     {
         $resp = Http::asForm()->post('https://public-api.wordpress.com/oauth2/token', [
             'client_id' => $this->clientId,
@@ -42,43 +40,48 @@ class WordPressService
             'code' => $code,
             'grant_type' => 'authorization_code',
         ]);
-        return $resp->json();
+        return $resp->successful() ? $resp->json() : [];
     }
 
-    // Get current user's sites
-    public function getUserSites(string $accessToken)
+    public function getUserSites(string $accessToken): array
     {
         $resp = Http::withToken($accessToken)->get('https://public-api.wordpress.com/rest/v1.1/me/sites');
-        return $resp->successful() ? $resp->json() : null;
+        return $resp->successful() ? $resp->json() : [];
     }
 
-    // List posts (simple)
-    public function listPosts(string $accessToken, $page = 1, $per_page = 20)
+    public function getMe(string $accessToken): array
     {
-        // using v1.1 posts endpoint
+        $resp = Http::withToken($accessToken)->get('https://public-api.wordpress.com/rest/v1.1/me');
+        return $resp->successful() ? $resp->json() : [];
+    }
+
+    public function listPosts(string $accessToken, int $page = 1, int $per_page = 50): array
+    {
         $resp = Http::withToken($accessToken)
                    ->get("https://public-api.wordpress.com/rest/v1.1/sites/{$this->siteId}/posts", [
                        'page' => $page,
                        'number' => $per_page
                    ]);
-        return $resp->successful() ? $resp->json()['posts'] ?? [] : [];
+        if (! $resp->successful()) return [];
+        $json = $resp->json();
+        return $json['posts'] ?? [];
     }
 
-    public function createPost(string $accessToken, array $data)
+    public function createPost(string $accessToken, array $data): array
     {
         $resp = Http::withToken($accessToken)
                ->post("https://public-api.wordpress.com/rest/v1.1/sites/{$this->siteId}/posts/new", $data);
-        return $resp->json();
+        return $resp->successful() ? $resp->json() : [];
     }
 
-    public function updatePost(string $accessToken, string $wpId, array $data)
+    public function updatePost(string $accessToken, string $wpId, array $data): array
     {
         $resp = Http::withToken($accessToken)
                ->post("https://public-api.wordpress.com/rest/v1.1/sites/{$this->siteId}/posts/{$wpId}/", $data);
-        return $resp->json();
+        return $resp->successful() ? $resp->json() : [];
     }
 
-    public function deletePost(string $accessToken, string $wpId)
+    public function deletePost(string $accessToken, string $wpId): bool
     {
         $resp = Http::withToken($accessToken)
                ->delete("https://public-api.wordpress.com/rest/v1.1/sites/{$this->siteId}/posts/{$wpId}/delete");

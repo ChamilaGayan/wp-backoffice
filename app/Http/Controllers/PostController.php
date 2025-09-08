@@ -8,22 +8,25 @@ use Illuminate\Support\Facades\Auth;
 
 class PostController extends Controller
 {
-    protected $wp;
-    public function __construct(WordPressService $wp) { $this->wp = $wp; }
+    protected WordPressService $wp;
 
-    // List local posts (if empty, sync from WP)
+    public function __construct(WordPressService $wp)
+    {
+        $this->middleware('auth');
+        $this->wp = $wp;
+    }
+
     public function index(Request $req)
     {
-        // allow sorting by priority
-        $q = Post::query();
-        if ($req->get('sort') == 'priority') {
-            $q->orderBy('priority','desc');
+        $query = Post::query();
+        if ($req->get('sort') === 'priority') {
+            $query->orderBy('priority','desc');
         } else {
-            $q->orderBy('updated_at','desc');
+            $query->orderBy('updated_at','desc');
         }
-        $posts = $q->get();
+        $posts = $query->get();
         if ($posts->isEmpty()) {
-            // attempt initial sync
+            // initial sync from WP
             $token = Auth::user()->access_token;
             $wpPosts = $this->wp->listPosts($token,1,100);
             foreach ($wpPosts as $wp) {
@@ -49,29 +52,31 @@ class PostController extends Controller
         $wpPost = $this->wp->createPost($token, [
             'title' => $req->title,
             'content' => $req->content,
-            'status' => $req->status ?? 'draft'
+            'status' => $req->status ?? 'draft',
         ]);
         $local = Post::create([
             'wordpress_id' => $wpPost['ID'] ?? null,
             'title' => $wpPost['title'] ?? $req->title,
             'content' => $wpPost['content'] ?? $req->content,
-            'status' => $wpPost['status'] ?? ($req->status ?? 'draft')
+            'status' => $wpPost['status'] ?? ($req->status ?? 'draft'),
+            'wp_updated_at' => $wpPost['date'] ?? now()
         ]);
-        return response()->json($local,201);
+        return response()->json($local, 201);
     }
 
     public function update(Request $req, Post $post)
     {
+        $req->validate(['title'=>'required','content'=>'required']);
         $token = Auth::user()->access_token;
         $wpRes = $this->wp->updatePost($token, $post->wordpress_id, [
             'title' => $req->title,
             'content' => $req->content,
-            'status' => $req->status,
+            'status' => $req->status ?? $post->status,
         ]);
         $post->update([
             'title' => $wpRes['title'] ?? $req->title,
             'content' => $wpRes['content'] ?? $req->content,
-            'status' => $wpRes['status'] ?? $req->status,
+            'status' => $wpRes['status'] ?? ($req->status ?? $post->status),
             'wp_updated_at' => $wpRes['modified'] ?? now()
         ]);
         return response()->json($post);
@@ -80,13 +85,16 @@ class PostController extends Controller
     public function destroy(Post $post)
     {
         $token = Auth::user()->access_token;
-        $this->wp->deletePost($token, $post->wordpress_id);
+        if ($post->wordpress_id) {
+            $this->wp->deletePost($token, $post->wordpress_id);
+        }
         $post->delete();
         return response()->json(['deleted'=>true]);
     }
 
     public function setPriority(Request $req, Post $post)
     {
+        $req->validate(['priority'=>'required|integer']);
         $post->update(['priority' => (int)$req->priority]);
         return response()->json($post);
     }

@@ -6,6 +6,10 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PostController;
 use App\Http\Controllers\WebhookController;
 
+Route::get('/', function () {
+    return view('welcome'); // <-- must match your Blade file
+});
+
 Route::get('/auth/redirect', [AuthController::class,'redirectToProvider']);
 Route::get('/auth/callback', [AuthController::class,'handleProviderCallback']);
 

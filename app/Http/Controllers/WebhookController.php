@@ -8,24 +8,30 @@ class WebhookController extends Controller
 {
     public function receive(Request $request)
     {
-        // verify signature if WP provides one (recommended)
-        // payload example includes event type and post data
         $payload = $request->all();
+        $event = $payload['event'] ?? null;
+        $post = $payload['post'] ?? null;
 
-        // Example: a new post created on WP
-        if (isset($payload['event']) && $payload['event'] === 'post.created') {
-            $wp = $payload['post'];
-            Post::updateOrCreate(
-                ['wordpress_id' => $wp['ID']],
-                [
-                    'title' => $wp['title'],
-                    'content' => $wp['content'],
-                    'status' => $wp['status'],
-                    'wp_updated_at' => $wp['date']
-                ]
-            );
+        if ($event && $post) {
+            switch ($event) {
+                case 'post.created':
+                case 'post.updated':
+                    Post::updateOrCreate(
+                        ['wordpress_id' => $post['ID']],
+                        [
+                            'title' => $post['title'] ?? '',
+                            'content' => $post['content'] ?? '',
+                            'status' => $post['status'] ?? 'draft',
+                            'wp_updated_at' => $post['date'] ?? null
+                        ]
+                    );
+                    break;
+                case 'post.deleted':
+                    Post::where('wordpress_id', $post['ID'])->delete();
+                    break;
+            }
         }
-        // Handle post.updated, post.deleted similarly
-        return response()->json(['ok'=>true]);
+
+        return response()->json(['ok' => true]);
     }
 }
